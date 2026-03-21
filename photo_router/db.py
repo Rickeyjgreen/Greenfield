@@ -7,6 +7,7 @@ from typing import Any
 
 from .classifier import classify_folder
 from .constants import ROUTING_CLASSES
+from .exporter import ExportSummary
 from .roster import LoadedRoster
 from .scanner import FolderScan
 
@@ -60,6 +61,21 @@ CREATE TABLE IF NOT EXISTS images (
     confidence REAL,
     review_reason TEXT NOT NULL DEFAULT 'manual_review_pending',
     FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS export_audits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    output_path TEXT NOT NULL,
+    routed_root_path TEXT NOT NULL,
+    summary_json_path TEXT NOT NULL,
+    summary_txt_path TEXT NOT NULL,
+    total_rows INTEGER NOT NULL,
+    copied_count INTEGER NOT NULL,
+    missing_source_count INTEGER NOT NULL,
+    failed_copy_count INTEGER NOT NULL,
+    exported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
 );
 '''
 
@@ -227,3 +243,57 @@ class Database:
         for row in self.connection.execute(query, (job_id,)):
             rows.append(dict(row))
         return rows
+
+    def record_export_audit(
+        self,
+        job_id: int,
+        output_path: str | Path,
+        routed_root_path: str | Path,
+        summary_json_path: str | Path,
+        summary_txt_path: str | Path,
+        summary: ExportSummary,
+    ) -> int:
+        cursor = self.connection.cursor()
+        cursor.execute(
+            '''
+            INSERT INTO export_audits (
+                job_id, output_path, routed_root_path, summary_json_path, summary_txt_path,
+                total_rows, copied_count, missing_source_count, failed_copy_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                job_id,
+                str(output_path),
+                str(routed_root_path),
+                str(summary_json_path),
+                str(summary_txt_path),
+                summary.total_rows,
+                summary.copied_count,
+                summary.missing_source_count,
+                summary.failed_copy_count,
+            ),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def fetch_latest_export_audit(self, job_id: int) -> dict[str, Any] | None:
+        query = '''
+        SELECT
+            id,
+            job_id,
+            output_path,
+            routed_root_path,
+            summary_json_path,
+            summary_txt_path,
+            total_rows,
+            copied_count,
+            missing_source_count,
+            failed_copy_count,
+            exported_at
+        FROM export_audits
+        WHERE job_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        '''
+        row = self.connection.execute(query, (job_id,)).fetchone()
+        return dict(row) if row is not None else None
