@@ -50,6 +50,15 @@ def validate_columns(fieldnames: Iterable[str] | None) -> list[str]:
     return columns
 
 
+def _normalize_row(raw_row: dict[str, object]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for key, value in raw_row.items():
+        if not key:
+            continue
+        normalized[key.strip()] = _normalize_value(value)
+    return normalized
+
+
 def load_roster(csv_path: str | Path) -> LoadedRoster:
     path = Path(csv_path)
     if not path.exists():
@@ -60,7 +69,12 @@ def load_roster(csv_path: str | Path) -> LoadedRoster:
         columns = validate_columns(reader.fieldnames)
         rows: list[RosterRow] = []
         for raw_row in reader:
-            normalized = {key: _normalize_value(value) for key, value in raw_row.items() if key}
+            normalized = _normalize_row(raw_row)
+            missing = [col for col in REQUIRED_ROSTER_COLUMNS if col not in normalized]
+            if missing:
+                raise RosterValidationError(
+                    'Ready_ CSV row is missing required values for columns: ' + ', '.join(missing)
+                )
             rows.append(
                 RosterRow(
                     child_id=normalized['Child ID'],

@@ -20,6 +20,26 @@ class PhotoRouterTests(unittest.TestCase):
             with self.assertRaises(RosterValidationError):
                 load_roster(csv_path)
 
+    def test_load_roster_normalizes_header_whitespace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = Path(tmp_dir) / 'ready_whitespace.csv'
+            with csv_path.open('w', encoding='utf-8', newline='') as handle:
+                writer = csv.writer(handle)
+                writer.writerow([
+                    'Child ID ',
+                    'Student firstname ',
+                    'Student lastname ',
+                    'Group ',
+                    'Access Code (1) ',
+                    'Barcode (1) ',
+                ])
+                writer.writerow(['1', 'Rickey', 'Green', 'Team A', 'A123', '000123'])
+
+            roster = load_roster(csv_path)
+            self.assertEqual(len(roster.rows), 1)
+            self.assertEqual(roster.rows[0].access_code, 'A123')
+            self.assertEqual(roster.rows[0].barcode_raw, '000123')
+
     def test_scan_matches_access_code_and_preserves_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)

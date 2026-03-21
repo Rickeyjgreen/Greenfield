@@ -130,6 +130,12 @@ class MainWindow(QMainWindow):
     def _append_status(self, message: str) -> None:
         self.status_log.append(message)
 
+    def _clear_folder_selection_state(self) -> None:
+        self.current_folder_id = None
+        self.folder_rows_by_table_row.clear()
+        self.folders_table.clearSelection()
+        self.images_table.setRowCount(0)
+
     def _ingest_job(self) -> None:
         roster_path = self.roster_path_edit.text().strip()
         image_root = self.image_root_edit.text().strip()
@@ -146,14 +152,16 @@ class MainWindow(QMainWindow):
                 f'Job {self.current_job_id} ingested: {len(roster.rows)} roster rows, {len(scans)} folders scanned.'
             )
         except (FileNotFoundError, NotADirectoryError, RosterValidationError, OSError, ValueError) as exc:
+            self._clear_folder_selection_state()
             QMessageBox.critical(self, APP_NAME, str(exc))
             self._append_status(f'Ingest failed: {exc}')
 
     def _populate_folders_table(self) -> None:
         if self.current_job_id is None:
+            self._clear_folder_selection_state()
             return
         folders = self.database.fetch_folders(self.current_job_id)
-        self.folder_rows_by_table_row.clear()
+        self._clear_folder_selection_state()
         self.folders_table.setRowCount(len(folders))
         for table_row, folder in enumerate(folders):
             self.folder_rows_by_table_row[table_row] = int(folder['id'])
@@ -179,10 +187,14 @@ class MainWindow(QMainWindow):
     def _load_selected_folder_images(self) -> None:
         selected_items = self.folders_table.selectionModel().selectedRows()
         if not selected_items:
+            self.current_folder_id = None
+            self.images_table.setRowCount(0)
             return
         table_row = selected_items[0].row()
         folder_id = self.folder_rows_by_table_row.get(table_row)
         if folder_id is None:
+            self.current_folder_id = None
+            self.images_table.setRowCount(0)
             return
         self.current_folder_id = folder_id
         images = self.database.fetch_images_for_folder(folder_id)
