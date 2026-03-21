@@ -7,7 +7,7 @@ from typing import Any
 
 from .classifier import classify_folder
 from .constants import ROUTING_CLASSES
-from .exporter import ExportSummary
+from .exporter import ExportPolicy, ExportSummary
 from .roster import LoadedRoster
 from .scanner import FolderScan
 
@@ -74,6 +74,10 @@ CREATE TABLE IF NOT EXISTS export_audits (
     copied_count INTEGER NOT NULL,
     missing_source_count INTEGER NOT NULL,
     failed_copy_count INTEGER NOT NULL,
+    include_class_labels_json TEXT NOT NULL DEFAULT '[]',
+    final_only INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    skipped_by_class_label_json TEXT NOT NULL DEFAULT '{}',
     exported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
 );
@@ -87,7 +91,23 @@ class Database:
         self.connection = sqlite3.connect(self.path)
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript(SCHEMA)
+        self._migrate_export_audits_table()
         self.connection.commit()
+
+    def _migrate_export_audits_table(self) -> None:
+        columns = {
+            row['name']
+            for row in self.connection.execute("PRAGMA table_info(export_audits)")
+        }
+        required_columns = {
+            'include_class_labels_json': "ALTER TABLE export_audits ADD COLUMN include_class_labels_json TEXT NOT NULL DEFAULT '[]'",
+            'final_only': "ALTER TABLE export_audits ADD COLUMN final_only INTEGER NOT NULL DEFAULT 0",
+            'skipped_count': "ALTER TABLE export_audits ADD COLUMN skipped_count INTEGER NOT NULL DEFAULT 0",
+            'skipped_by_class_label_json': "ALTER TABLE export_audits ADD COLUMN skipped_by_class_label_json TEXT NOT NULL DEFAULT '{}'",
+        }
+        for column_name, statement in required_columns.items():
+            if column_name not in columns:
+                self.connection.execute(statement)
 
     def close(self) -> None:
         self.connection.close()
@@ -252,14 +272,17 @@ class Database:
         summary_json_path: str | Path,
         summary_txt_path: str | Path,
         summary: ExportSummary,
+        policy: ExportPolicy | None = None,
     ) -> int:
+        resolved_policy = policy if policy is not None else ExportPolicy()
         cursor = self.connection.cursor()
         cursor.execute(
             '''
             INSERT INTO export_audits (
                 job_id, output_path, routed_root_path, summary_json_path, summary_txt_path,
-                total_rows, copied_count, missing_source_count, failed_copy_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                total_rows, copied_count, missing_source_count, failed_copy_count,
+                include_class_labels_json, final_only, skipped_count, skipped_by_class_label_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''',
             (
                 job_id,
@@ -271,6 +294,10 @@ class Database:
                 summary.copied_count,
                 summary.missing_source_count,
                 summary.failed_copy_count,
+                json.dumps(list(resolved_policy.normalized_labels())),
+                1 if resolved_policy.final_only else 0,
+                summary.skipped_count,
+                json.dumps(summary.skipped_by_class_label),
             ),
         )
         self.connection.commit()
@@ -289,6 +316,10 @@ class Database:
             copied_count,
             missing_source_count,
             failed_copy_count,
+            include_class_labels_json,
+            final_only,
+            skipped_count,
+            skipped_by_class_label_json,
             exported_at
         FROM export_audits
         WHERE job_id = ?
@@ -296,4 +327,10 @@ class Database:
         LIMIT 1
         '''
         row = self.connection.execute(query, (job_id,)).fetchone()
-        return dict(row) if row is not None else None
+        if row is None:
+            return None
+        data = dict(row)
+        data['include_class_labels'] = json.loads(data.pop('include_class_labels_json') or '[]')
+        data['skipped_by_class_label'] = json.loads(data.pop('skipped_by_class_label_json') or '{}')
+        data['final_only'] = bool(data['final_only'])
+        return data

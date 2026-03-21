@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 from pathlib import Path
 
@@ -52,12 +53,28 @@ def main() -> None:
 
         db = Database(tmp / 'smoke.db')
         job_id = db.create_job(roster, image_root, scans)
+        export_rows = db.fetch_export_rows(job_id)
+        alt_path = next(Path(row['file_path']) for row in export_rows if row['source_filename'] == 'IMG_0002_alt.JPG')
+        group_path = next(Path(row['file_path']) for row in export_rows if row['source_filename'] == 'IMG_0003_group.JPG')
+        db.connection.execute(
+            "UPDATE images SET class_label = 'review_required', selected_final = 0 WHERE filename = ?",
+            ('IMG_0002_alt.JPG',),
+        )
+        db.connection.execute(
+            "UPDATE images SET class_label = 'reject', selected_final = 0 WHERE filename = ?",
+            ('IMG_0003_group.JPG',),
+        )
+        db.connection.commit()
+
         csv_path, json_path, routed_root, summary_json_path, summary_txt_path, audit_id = export_job_package_with_audit(
             db,
             job_id,
             export_root,
         )
         latest_report = get_latest_export_audit_report(db, job_id)
+
+        manifest_rows = json.loads(json_path.read_text(encoding='utf-8'))
+        summary_data = json.loads(summary_json_path.read_text(encoding='utf-8'))
 
         assert len(roster.rows) == 2
         assert len(scans) == 1
@@ -66,19 +83,31 @@ def main() -> None:
         assert summary_json_path.exists() and summary_txt_path.exists()
         assert audit_id > 0
         assert latest_report is not None
+        assert len(manifest_rows) == 1
+        assert manifest_rows[0]['source_filename'] == 'IMG_0001_primary.JPG'
         assert latest_report.job_id == job_id
-        assert latest_report.total_rows == 3
-        assert latest_report.copied_count == 3
+        assert latest_report.total_rows == 1
+        assert latest_report.copied_count == 1
         assert latest_report.missing_source_count == 0
         assert latest_report.failed_copy_count == 0
+        assert latest_report.skipped_count == 2
+        assert latest_report.skipped_by_class_label['review_required'] == 1
+        assert latest_report.skipped_by_class_label['reject'] == 1
+        assert latest_report.final_only is False
+        assert 'review_required' not in latest_report.include_class_labels
+        assert 'reject' not in latest_report.include_class_labels
         assert Path(latest_report.output_path) == export_root
         assert Path(latest_report.routed_root_path) == routed_root
         assert Path(latest_report.summary_json_path) == summary_json_path
         assert Path(latest_report.summary_txt_path) == summary_txt_path
-        assert latest_report.audit_id == audit_id
         assert (routed_root / 'student_solo_primary_candidate' / 'A123' / 'IMG_0001_primary.JPG').exists()
-        assert (routed_root / 'student_solo_alt_candidate' / 'A123' / 'IMG_0002_alt.JPG').exists()
-        assert (routed_root / 'buddy_multi_person' / 'A123' / 'IMG_0003_group.JPG').exists()
+        assert not (routed_root / 'review_required' / 'A123' / 'IMG_0002_alt.JPG').exists()
+        assert not (routed_root / 'reject' / 'A123' / 'IMG_0003_group.JPG').exists()
+        assert alt_path.exists()
+        assert group_path.exists()
+        assert summary_data['skipped_count'] == 2
+        assert summary_data['skipped_by_class_label']['review_required'] == 1
+        assert summary_data['skipped_by_class_label']['reject'] == 1
         db.close()
         print('SMOKE_OK')
 

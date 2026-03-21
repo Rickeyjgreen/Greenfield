@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .db import Database
-from .exporter import ExportSummary, export_package_with_summary
+from .exporter import ExportPolicy, ExportSummary, export_package_with_policy, export_package_with_summary
 
 
 @dataclass(slots=True)
@@ -20,6 +20,10 @@ class LatestExportAuditReport:
     copied_count: int
     missing_source_count: int
     failed_copy_count: int
+    include_class_labels: list[str]
+    final_only: bool
+    skipped_count: int
+    skipped_by_class_label: dict[str, int]
     exported_at: str
 
     def to_dict(self) -> dict:
@@ -30,25 +34,17 @@ def export_job_package_with_audit(
     database: Database,
     job_id: int,
     output_dir: str | Path,
+    policy: ExportPolicy | None = None,
 ) -> tuple[Path, Path, Path, Path, Path, int]:
     rows = database.fetch_export_rows(job_id)
     csv_path, manifest_json_path, routed_root, summary_json_path, summary_txt_path = export_package_with_summary(
         rows,
         output_dir,
+        policy=policy,
     )
 
     summary_data = json.loads(Path(summary_json_path).read_text(encoding='utf-8'))
-    summary = ExportSummary(
-        total_rows=summary_data['total_rows'],
-        copied_count=summary_data['copied_count'],
-        missing_source_count=summary_data['missing_source_count'],
-        failed_copy_count=summary_data['failed_copy_count'],
-        rows_by_class_label=summary_data['rows_by_class_label'],
-        copied_by_class_label=summary_data['copied_by_class_label'],
-        missing_by_class_label=summary_data['missing_by_class_label'],
-        failed_by_class_label=summary_data['failed_by_class_label'],
-        failures=[],
-    )
+    summary = ExportSummary.from_dict(summary_data)
     audit_id = database.record_export_audit(
         job_id=job_id,
         output_path=output_dir,
@@ -56,6 +52,34 @@ def export_job_package_with_audit(
         summary_json_path=summary_json_path,
         summary_txt_path=summary_txt_path,
         summary=summary,
+        policy=policy,
+    )
+    return csv_path, manifest_json_path, routed_root, summary_json_path, summary_txt_path, audit_id
+
+
+def export_job_package_with_policy_and_audit(
+    database: Database,
+    job_id: int,
+    output_dir: str | Path,
+    policy: ExportPolicy,
+) -> tuple[Path, Path, Path, Path, Path, int]:
+    rows = database.fetch_export_rows(job_id)
+    csv_path, manifest_json_path, routed_root, summary_json_path, summary_txt_path = export_package_with_policy(
+        rows,
+        output_dir,
+        policy,
+    )
+
+    summary_data = json.loads(Path(summary_json_path).read_text(encoding='utf-8'))
+    summary = ExportSummary.from_dict(summary_data)
+    audit_id = database.record_export_audit(
+        job_id=job_id,
+        output_path=output_dir,
+        routed_root_path=routed_root,
+        summary_json_path=summary_json_path,
+        summary_txt_path=summary_txt_path,
+        summary=summary,
+        policy=policy,
     )
     return csv_path, manifest_json_path, routed_root, summary_json_path, summary_txt_path, audit_id
 
@@ -79,5 +103,9 @@ def get_latest_export_audit_report(
         copied_count=int(latest['copied_count']),
         missing_source_count=int(latest['missing_source_count']),
         failed_copy_count=int(latest['failed_copy_count']),
+        include_class_labels=list(latest['include_class_labels']),
+        final_only=bool(latest['final_only']),
+        skipped_count=int(latest['skipped_count']),
+        skipped_by_class_label=dict(latest['skipped_by_class_label']),
         exported_at=str(latest['exported_at']),
     )
