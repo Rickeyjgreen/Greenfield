@@ -8,14 +8,15 @@ Windows-first local desktop scaffold for the Photo Router v1 Milestone 0 slice.
 - Image-root folder scan with Access Code (1) default folder matching
 - Capture-order image listing
 - Local SQLite persistence
+- Deterministic ingest-time seed classification
 - Manual review table with class override and final-selected toggle
-- CSV and JSON manifest export stub
+- CSV and JSON manifest export
+- Routed export folders by class label without mutating source files
 
 ## Out of scope in this commit
 
 - ML identity grouping
-- automatic quality ranking
-- buddy/adult auto-classification
+- automatic quality ranking from image content
 - Pixnub integration
 - Actual_ to Ready_ conversion
 
@@ -45,8 +46,14 @@ python scripts/smoke_run.py
 python -m unittest discover -s tests
 ```
 
+## Export behavior
+
+- Manifest files are written to the export root.
+- Routed image copies are written to `routed_by_class/<class_label>/<source_folder>/`.
+- Source files are preserved and never mutated.
+- Name collisions in routed output are deduplicated with numeric suffixes.
+
 ## Notes
 
-- Source files are not mutated.
 - Barcode values are preserved as text.
-- All images start in `review_required` until manual review or later classifier work.
+- Manual review can still override all seeded classifications.

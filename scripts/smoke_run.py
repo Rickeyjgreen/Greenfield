@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 from photo_router.db import Database
-from photo_router.exporter import export_manifest
+from photo_router.exporter import export_package
 from photo_router.roster import load_roster
 from photo_router.scanner import scan_image_root
 
@@ -53,7 +53,7 @@ def main() -> None:
         db = Database(tmp / 'smoke.db')
         job_id = db.create_job(roster, image_root, scans)
         rows = db.fetch_export_rows(job_id)
-        csv_path, json_path = export_manifest(rows, export_root)
+        csv_path, json_path, routed_root = export_package(rows, export_root)
 
         assert len(roster.rows) == 2
         assert len(scans) == 1
@@ -64,6 +64,9 @@ def main() -> None:
         assert rows[1]['class_label'] == 'student_solo_alt_candidate'
         assert rows[2]['class_label'] == 'buddy_multi_person'
         assert csv_path.exists() and json_path.exists()
+        assert (routed_root / 'student_solo_primary_candidate' / 'A123' / 'IMG_0001_primary.JPG').exists()
+        assert (routed_root / 'student_solo_alt_candidate' / 'A123' / 'IMG_0002_alt.JPG').exists()
+        assert (routed_root / 'buddy_multi_person' / 'A123' / 'IMG_0003_group.JPG').exists()
         db.close()
         print('SMOKE_OK')
 
