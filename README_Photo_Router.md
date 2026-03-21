@@ -12,6 +12,7 @@ Windows-first local desktop scaffold for the Photo Router v1 Milestone 0 slice.
 - Manual review table with class override and final-selected toggle
 - CSV and JSON manifest export
 - Routed export folders by class label without mutating source files
+- Export summary reporting with class-label counts and missing/failed copy details
 
 ## Out of scope in this commit
 
@@ -50,8 +51,12 @@ python -m unittest discover -s tests
 
 - Manifest files are written to the export root.
 - Routed image copies are written to `routed_by_class/<class_label>/<source_folder>/`.
+- Export summary files are written to:
+  - `photo_router_export_summary.json`
+  - `photo_router_export_summary.txt`
 - Source files are preserved and never mutated.
 - Name collisions in routed output are deduplicated with numeric suffixes.
+- Missing source images are reported in the export summary.
 
 ## Notes
 
