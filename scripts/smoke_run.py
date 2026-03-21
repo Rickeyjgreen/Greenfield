@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 from photo_router.db import Database
-from photo_router.export_audit import export_job_package_with_audit
+from photo_router.export_audit import export_job_package_with_audit, get_latest_export_audit_report
 from photo_router.roster import load_roster
 from photo_router.scanner import scan_image_root
 
@@ -57,7 +57,7 @@ def main() -> None:
             job_id,
             export_root,
         )
-        latest_audit = db.fetch_latest_export_audit(job_id)
+        latest_report = get_latest_export_audit_report(db, job_id)
 
         assert len(roster.rows) == 2
         assert len(scans) == 1
@@ -65,16 +65,17 @@ def main() -> None:
         assert csv_path.exists() and json_path.exists()
         assert summary_json_path.exists() and summary_txt_path.exists()
         assert audit_id > 0
-        assert latest_audit is not None
-        assert latest_audit['job_id'] == job_id
-        assert latest_audit['total_rows'] == 3
-        assert latest_audit['copied_count'] == 3
-        assert latest_audit['missing_source_count'] == 0
-        assert latest_audit['failed_copy_count'] == 0
-        assert Path(latest_audit['output_path']) == export_root
-        assert Path(latest_audit['routed_root_path']) == routed_root
-        assert Path(latest_audit['summary_json_path']) == summary_json_path
-        assert Path(latest_audit['summary_txt_path']) == summary_txt_path
+        assert latest_report is not None
+        assert latest_report.job_id == job_id
+        assert latest_report.total_rows == 3
+        assert latest_report.copied_count == 3
+        assert latest_report.missing_source_count == 0
+        assert latest_report.failed_copy_count == 0
+        assert Path(latest_report.output_path) == export_root
+        assert Path(latest_report.routed_root_path) == routed_root
+        assert Path(latest_report.summary_json_path) == summary_json_path
+        assert Path(latest_report.summary_txt_path) == summary_txt_path
+        assert latest_report.audit_id == audit_id
         assert (routed_root / 'student_solo_primary_candidate' / 'A123' / 'IMG_0001_primary.JPG').exists()
         assert (routed_root / 'student_solo_alt_candidate' / 'A123' / 'IMG_0002_alt.JPG').exists()
         assert (routed_root / 'buddy_multi_person' / 'A123' / 'IMG_0003_group.JPG').exists()
