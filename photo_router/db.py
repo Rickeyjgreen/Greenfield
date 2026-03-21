@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from .classifier import classify_folder
 from .constants import ROUTING_CLASSES
 from .roster import LoadedRoster
 from .scanner import FolderScan
@@ -123,12 +124,14 @@ class Database:
                 ),
             )
             folder_id = int(cursor.lastrowid)
-            for image in scan.images:
+            classifications = classify_folder(scan)
+            for image, classification in zip(scan.images, classifications):
                 cursor.execute(
                     '''
                     INSERT INTO images (
-                        folder_id, order_index, filename, file_path, modified_time
-                    ) VALUES (?, ?, ?, ?, ?)
+                        folder_id, order_index, filename, file_path, modified_time,
+                        class_label, selected_final, confidence, review_reason
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''',
                     (
                         folder_id,
@@ -136,6 +139,10 @@ class Database:
                         image.filename,
                         str(image.path),
                         image.modified_time,
+                        classification.class_label,
+                        1 if classification.selected_final else 0,
+                        classification.confidence,
+                        classification.review_reason,
                     ),
                 )
 

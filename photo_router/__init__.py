@@ -1,4 +1,5 @@
 __all__ = [
+    'classifier',
     'constants',
     'db',
     'exporter',

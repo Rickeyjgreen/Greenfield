@@ -31,8 +31,9 @@ def write_sample_csv(path: Path) -> None:
 def write_sample_images(root: Path) -> None:
     folder = root / 'A123'
     folder.mkdir(parents=True, exist_ok=True)
-    for index in range(1, 4):
-        (folder / f'IMG_{index:04d}.JPG').write_bytes(b'not-a-real-image-yet')
+    (folder / 'IMG_0001_primary.JPG').write_bytes(b'primary-image')
+    (folder / 'IMG_0002_alt.JPG').write_bytes(b'alt-image')
+    (folder / 'IMG_0003_group.JPG').write_bytes(b'group-image')
 
 
 def main() -> None:
@@ -58,6 +59,10 @@ def main() -> None:
         assert len(scans) == 1
         assert scans[0].matched is True
         assert len(rows) == 3
+        assert rows[0]['class_label'] == 'student_solo_primary_candidate'
+        assert rows[0]['selected_final'] == 1
+        assert rows[1]['class_label'] == 'student_solo_alt_candidate'
+        assert rows[2]['class_label'] == 'buddy_multi_person'
         assert csv_path.exists() and json_path.exists()
         db.close()
         print('SMOKE_OK')
