@@ -7,6 +7,7 @@ from pathlib import Path
 
 from photo_router.exporter import (
     DEFAULT_EXPORT_POLICY,
+    ExportFailure,
     ExportPolicy,
     ExportSummary,
     export_package,
@@ -268,14 +269,14 @@ class ExporterTests(unittest.TestCase):
             summary = ExportSummary(export_policy=DEFAULT_EXPORT_POLICY.to_dict())
             summary.note_row('review_required')
             summary.note_missing(
-                type('FailureLike', (), {
-                    'class_label': 'review_required',
-                    'source_folder': 'A123',
-                    'source_filename': 'IMG_0002.JPG',
-                    'file_path': '/tmp/IMG_0002.JPG',
-                    'failure_type': 'missing_source',
-                    'error': 'Source image not found',
-                })()
+                ExportFailure(
+                    class_label='review_required',
+                    source_folder='A123',
+                    source_filename='IMG_0002.JPG',
+                    file_path='/tmp/IMG_0002.JPG',
+                    failure_type='missing_source',
+                    error='Source image not found',
+                )
             )
             json_path, txt_path = write_export_summary(summary, tmp_dir)
 
