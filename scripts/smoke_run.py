@@ -5,6 +5,8 @@ import json
 import tempfile
 from pathlib import Path
 
+from PIL import Image, TiffImagePlugin
+
 from photo_router.db import Database
 from photo_router.export_audit import export_job_package_with_audit, get_latest_export_audit_report
 from photo_router.roster import load_roster
@@ -25,23 +27,29 @@ def write_sample_csv(path: Path) -> None:
     with path.open('w', encoding='utf-8', newline='') as handle:
         writer = csv.writer(handle)
         writer.writerow(ROSTER_HEADER)
-        writer.writerow(['1001', 'Rickey', 'Green', 'Team A', 'A123', '000123'])
-        writer.writerow(['1002', 'Jane', 'Coach', 'Team A', 'A124', '000124'])
+        writer.writerow(['1001', 'Rickey', 'Green', 'Roster Team A', 'A123', '31756845281541'])
+        writer.writerow(['1002', 'Jane', 'Coach', 'Roster Team B', 'A124', '31756845281542'])
 
 
 def write_sample_images(root: Path) -> None:
-    folder = root / 'A123'
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / 'IMG_0001_primary.JPG').write_bytes(b'primary-image')
-    (folder / 'IMG_0002_alt.JPG').write_bytes(b'alt-image')
-    (folder / 'IMG_0003_group.JPG').write_bytes(b'group-image')
+    matched_primary = root / 'IMG_0001_primary.tif'
+    matched_alt = root / 'IMG_0002_alt.tif'
+    unmatched = root / 'IMG_0003_unmatched.tif'
+
+    image = Image.new('RGB', (8, 8), color='white')
+    matched_info = TiffImagePlugin.ImageFileDirectory_v2()
+    matched_info[33432] = '31756845281541'
+    matched_info[270] = 'Image Title Team A'
+    image.save(matched_primary, tiffinfo=matched_info)
+    image.save(matched_alt, tiffinfo=matched_info)
+    image.save(unmatched)
 
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         roster_path = tmp / 'Ready_sample.csv'
-        image_root = tmp / 'images'
+        image_root = tmp / 'sm tif - Test Dupe'
         export_root = tmp / 'exports'
         image_root.mkdir(parents=True, exist_ok=True)
 
@@ -54,15 +62,10 @@ def main() -> None:
         db = Database(tmp / 'smoke.db')
         job_id = db.create_job(roster, image_root, scans)
         export_rows = db.fetch_export_rows(job_id)
-        alt_path = next(Path(row['file_path']) for row in export_rows if row['source_filename'] == 'IMG_0002_alt.JPG')
-        group_path = next(Path(row['file_path']) for row in export_rows if row['source_filename'] == 'IMG_0003_group.JPG')
+        unmatched_path = next(Path(row['file_path']) for row in export_rows if row['source_filename'] == 'IMG_0003_unmatched.tif')
         db.connection.execute(
             "UPDATE images SET class_label = 'review_required', selected_final = 0 WHERE filename = ?",
-            ('IMG_0002_alt.JPG',),
-        )
-        db.connection.execute(
-            "UPDATE images SET class_label = 'reject', selected_final = 0 WHERE filename = ?",
-            ('IMG_0003_group.JPG',),
+            ('IMG_0003_unmatched.tif',),
         )
         db.connection.commit()
 
@@ -77,37 +80,38 @@ def main() -> None:
         summary_data = json.loads(summary_json_path.read_text(encoding='utf-8'))
 
         assert len(roster.rows) == 2
-        assert len(scans) == 1
-        assert scans[0].matched is True
+        assert len(scans) == 2
+        assert any(scan.matched for scan in scans)
         assert csv_path.exists() and json_path.exists()
         assert summary_json_path.exists() and summary_txt_path.exists()
         assert audit_id > 0
         assert latest_report is not None
-        assert len(manifest_rows) == 1
-        assert manifest_rows[0]['source_filename'] == 'IMG_0001_primary.JPG'
+        assert len(manifest_rows) == 2
+        for row in manifest_rows:
+            assert row['source_folder'] == 'sm tif - Test Dupe'
+            assert row['group_name'] == 'Image Title Team A'
+            assert row['child_id'] == '1001'
+            assert row['access_code'] == 'A123'
+            assert row['barcode_raw'] == '31756845281541'
         assert latest_report.job_id == job_id
-        assert latest_report.total_rows == 1
-        assert latest_report.copied_count == 1
+        assert latest_report.total_rows == 2
+        assert latest_report.copied_count == 2
         assert latest_report.missing_source_count == 0
         assert latest_report.failed_copy_count == 0
-        assert latest_report.skipped_count == 2
+        assert latest_report.skipped_count == 1
         assert latest_report.skipped_by_class_label['review_required'] == 1
-        assert latest_report.skipped_by_class_label['reject'] == 1
         assert latest_report.final_only is False
         assert 'review_required' not in latest_report.include_class_labels
-        assert 'reject' not in latest_report.include_class_labels
         assert Path(latest_report.output_path) == export_root
         assert Path(latest_report.routed_root_path) == routed_root
         assert Path(latest_report.summary_json_path) == summary_json_path
         assert Path(latest_report.summary_txt_path) == summary_txt_path
-        assert (routed_root / 'student_solo_primary_candidate' / 'A123' / 'IMG_0001_primary.JPG').exists()
-        assert not (routed_root / 'review_required' / 'A123' / 'IMG_0002_alt.JPG').exists()
-        assert not (routed_root / 'reject' / 'A123' / 'IMG_0003_group.JPG').exists()
-        assert alt_path.exists()
-        assert group_path.exists()
-        assert summary_data['skipped_count'] == 2
+        assert (routed_root / 'student_solo_primary_candidate' / 'sm_tif_-_Test_Dupe' / 'IMG_0001_primary.tif').exists()
+        assert (routed_root / 'student_solo_alt_candidate' / 'sm_tif_-_Test_Dupe' / 'IMG_0002_alt.tif').exists()
+        assert not (routed_root / 'review_required' / 'sm_tif_-_Test_Dupe' / 'IMG_0003_unmatched.tif').exists()
+        assert unmatched_path.exists()
+        assert summary_data['skipped_count'] == 1
         assert summary_data['skipped_by_class_label']['review_required'] == 1
-        assert summary_data['skipped_by_class_label']['reject'] == 1
         db.close()
         print('SMOKE_OK')
 

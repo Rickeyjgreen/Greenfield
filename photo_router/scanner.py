@@ -3,13 +3,16 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from PIL import Image
 
 from .constants import IMAGE_EXTENSIONS
 from .roster import LoadedRoster, RosterRow
 
+TIFF_IMAGE_DESCRIPTION_TAG = 270
 TIFF_COPYRIGHT_TAG = 33432
+EXIF_XP_TITLE_TAG = 40091
 UNMATCHED_ROOT_GROUP = '__UNMATCHED_ROOT__'
 
 
@@ -28,6 +31,8 @@ class FolderScan:
     folder_key: str
     roster_row: RosterRow | None
     images: list[ScannedImage]
+    source_barcode_raw: str = ''
+    source_group_name: str = ''
 
     @property
     def matched(self) -> bool:
@@ -62,33 +67,71 @@ def _normalize_metadata_value(value: object) -> str:
             value = value.decode('utf-8', errors='ignore')
         except Exception:
             value = value.decode(errors='ignore')
-    return str(value).strip()
+    return str(value).strip().strip('\x00')
 
 
-def _extract_metadata_barcode(image_path: Path) -> str:
+def _normalize_title_value(value: object) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, bytes):
+        if b'\x00' in value:
+            try:
+                decoded = value.decode('utf-16-le', errors='ignore')
+                return decoded.strip().strip('\x00')
+            except Exception:
+                pass
+    return _normalize_metadata_value(value)
+
+
+def _normalize_barcode_token(value: str) -> str:
+    token = value.strip().strip('"\'[]()')
+    token = re.sub(r'\s+', '', token)
+    return token
+
+
+def _barcode_candidates(raw_barcode: str) -> list[str]:
+    cleaned = _normalize_metadata_value(raw_barcode)
+    if not cleaned:
+        return []
+    candidates: list[str] = []
+    for part in re.split(r'[;,\n\r]+', cleaned):
+        token = _normalize_barcode_token(part)
+        if token and token not in candidates:
+            candidates.append(token)
+    if not candidates:
+        token = _normalize_barcode_token(cleaned)
+        if token:
+            candidates.append(token)
+    return candidates
+
+
+def _extract_metadata_fields(image_path: Path) -> tuple[str, str]:
     try:
         with Image.open(image_path) as image:
+            raw_barcode = ''
+            title = ''
+
             exif = image.getexif()
             if exif:
-                barcode = _normalize_metadata_value(exif.get(TIFF_COPYRIGHT_TAG))
-                if barcode:
-                    return barcode
+                raw_barcode = raw_barcode or _normalize_metadata_value(exif.get(TIFF_COPYRIGHT_TAG))
+                title = title or _normalize_title_value(exif.get(TIFF_IMAGE_DESCRIPTION_TAG))
+                title = title or _normalize_title_value(exif.get(EXIF_XP_TITLE_TAG))
 
             tag_v2 = getattr(image, 'tag_v2', None)
             if tag_v2 is not None:
-                barcode = _normalize_metadata_value(tag_v2.get(TIFF_COPYRIGHT_TAG))
-                if barcode:
-                    return barcode
+                raw_barcode = raw_barcode or _normalize_metadata_value(tag_v2.get(TIFF_COPYRIGHT_TAG))
+                title = title or _normalize_title_value(tag_v2.get(TIFF_IMAGE_DESCRIPTION_TAG))
+                title = title or _normalize_title_value(tag_v2.get(EXIF_XP_TITLE_TAG))
 
             info = getattr(image, 'info', {}) or {}
             for key in ('copyright', 'Copyright', 'tiff:copyright'):
-                barcode = _normalize_metadata_value(info.get(key))
-                if barcode:
-                    return barcode
-    except Exception:
-        return ''
+                raw_barcode = raw_barcode or _normalize_metadata_value(info.get(key))
+            for key in ('title', 'Title', 'ImageDescription'):
+                title = title or _normalize_title_value(info.get(key))
 
-    return ''
+            return raw_barcode, title
+    except Exception:
+        return '', ''
 
 
 def _scan_folder_mode(root: Path, roster_by_access_code: dict[str, RosterRow]) -> list[FolderScan]:
@@ -111,23 +154,33 @@ def _scan_folder_mode(root: Path, roster_by_access_code: dict[str, RosterRow]) -
 def _scan_flat_root_mode(root: Path, roster_by_barcode: dict[str, RosterRow]) -> list[FolderScan]:
     image_files = _iter_image_files(root)
     grouped_files: dict[str, list[Path]] = defaultdict(list)
+    group_metadata: dict[str, dict[str, str]] = {}
 
     for image_file in image_files:
-        barcode = _extract_metadata_barcode(image_file)
-        group_key = barcode if barcode else UNMATCHED_ROOT_GROUP
+        raw_barcode, title = _extract_metadata_fields(image_file)
+        candidates = _barcode_candidates(raw_barcode)
+        matched_barcode = next((candidate for candidate in candidates if candidate in roster_by_barcode), '')
+        group_key = matched_barcode or (candidates[0] if candidates else UNMATCHED_ROOT_GROUP)
         grouped_files[group_key].append(image_file)
+        metadata = group_metadata.setdefault(group_key, {'barcode_raw': '', 'group_name': ''})
+        if raw_barcode and not metadata['barcode_raw']:
+            metadata['barcode_raw'] = raw_barcode
+        if title and not metadata['group_name']:
+            metadata['group_name'] = title
 
     scans: list[FolderScan] = []
     for group_key in sorted(grouped_files, key=str.lower):
         group_files = sorted(grouped_files[group_key], key=lambda item: (item.name.lower(), item.stat().st_mtime))
-        folder_name = group_key if group_key != UNMATCHED_ROOT_GROUP else f'{root.name}_{UNMATCHED_ROOT_GROUP}'
+        metadata = group_metadata.get(group_key, {})
         scans.append(
             FolderScan(
-                folder_name=folder_name,
+                folder_name=root.name,
                 folder_path=root,
                 folder_key=group_key,
                 roster_row=roster_by_barcode.get(group_key),
                 images=_make_scanned_images(group_files),
+                source_barcode_raw=metadata.get('barcode_raw', ''),
+                source_group_name=metadata.get('group_name', ''),
             )
         )
     return scans

@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS folders (
     folder_path TEXT NOT NULL,
     folder_key TEXT NOT NULL,
     roster_row_id INTEGER,
+    source_group_name TEXT NOT NULL DEFAULT '',
+    source_barcode_raw TEXT NOT NULL DEFAULT '',
     matched INTEGER NOT NULL DEFAULT 0,
     image_count INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
@@ -91,8 +93,22 @@ class Database:
         self.connection = sqlite3.connect(self.path)
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript(SCHEMA)
+        self._migrate_folders_table()
         self._migrate_export_audits_table()
         self.connection.commit()
+
+    def _migrate_folders_table(self) -> None:
+        columns = {
+            row['name']
+            for row in self.connection.execute("PRAGMA table_info(folders)")
+        }
+        required_columns = {
+            'source_group_name': "ALTER TABLE folders ADD COLUMN source_group_name TEXT NOT NULL DEFAULT ''",
+            'source_barcode_raw': "ALTER TABLE folders ADD COLUMN source_barcode_raw TEXT NOT NULL DEFAULT ''",
+        }
+        for column_name, statement in required_columns.items():
+            if column_name not in columns:
+                self.connection.execute(statement)
 
     def _migrate_export_audits_table(self) -> None:
         columns = {
@@ -120,7 +136,8 @@ class Database:
         )
         job_id = int(cursor.lastrowid)
 
-        roster_map: dict[str, int] = {}
+        roster_by_access_code: dict[str, int] = {}
+        roster_by_barcode: dict[str, int] = {}
         for row in roster.rows:
             cursor.execute(
                 '''
@@ -139,15 +156,25 @@ class Database:
                     json.dumps(row.raw, ensure_ascii=False),
                 ),
             )
-            roster_map[row.access_code] = int(cursor.lastrowid)
+            roster_row_id = int(cursor.lastrowid)
+            if row.access_code:
+                roster_by_access_code[row.access_code] = roster_row_id
+            if row.barcode_raw:
+                roster_by_barcode[row.barcode_raw] = roster_row_id
 
         for scan in scans:
-            roster_row_id = roster_map.get(scan.folder_key) if scan.roster_row else None
+            roster_row_id = None
+            if scan.roster_row is not None:
+                if scan.roster_row.barcode_raw and scan.folder_key == scan.roster_row.barcode_raw:
+                    roster_row_id = roster_by_barcode.get(scan.roster_row.barcode_raw)
+                if roster_row_id is None and scan.roster_row.access_code:
+                    roster_row_id = roster_by_access_code.get(scan.roster_row.access_code)
             cursor.execute(
                 '''
                 INSERT INTO folders (
-                    job_id, folder_name, folder_path, folder_key, roster_row_id, matched, image_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    job_id, folder_name, folder_path, folder_key, roster_row_id,
+                    source_group_name, source_barcode_raw, matched, image_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''',
                 (
                     job_id,
@@ -155,6 +182,8 @@ class Database:
                     str(scan.folder_path),
                     scan.folder_key,
                     roster_row_id,
+                    scan.source_group_name,
+                    scan.source_barcode_raw,
                     1 if scan.matched else 0,
                     len(scan.images),
                 ),
@@ -192,6 +221,8 @@ class Database:
             f.folder_name,
             f.folder_path,
             f.folder_key,
+            f.source_group_name,
+            f.source_barcode_raw,
             f.matched,
             f.image_count,
             r.child_id,
@@ -203,7 +234,7 @@ class Database:
         FROM folders f
         LEFT JOIN roster_rows r ON r.id = f.roster_row_id
         WHERE f.job_id = ?
-        ORDER BY f.folder_name COLLATE NOCASE
+        ORDER BY f.folder_key COLLATE NOCASE
         '''
         return list(self.connection.execute(query, (job_id,)))
 
@@ -248,16 +279,16 @@ class Database:
             i.selected_final,
             i.confidence,
             i.review_reason,
-            r.group_name,
+            COALESCE(f.source_group_name, r.group_name) AS group_name,
             r.child_id,
             r.access_code,
-            r.barcode_raw
+            COALESCE(f.source_barcode_raw, r.barcode_raw) AS barcode_raw
         FROM jobs j
         INNER JOIN folders f ON f.job_id = j.id
         INNER JOIN images i ON i.folder_id = f.id
         LEFT JOIN roster_rows r ON r.id = f.roster_row_id
         WHERE j.id = ?
-        ORDER BY f.folder_name COLLATE NOCASE, i.order_index ASC
+        ORDER BY f.folder_key COLLATE NOCASE, i.order_index ASC
         '''
         rows = []
         for row in self.connection.execute(query, (job_id,)):
