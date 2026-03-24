@@ -7,6 +7,7 @@ from pathlib import Path
 
 from photo_router.db import Database
 from photo_router.export_audit import (
+    export_job_package_for_gui,
     export_job_package_with_audit,
     export_job_package_with_policy_and_audit,
     get_latest_export_audit_report,
@@ -92,6 +93,61 @@ class ExportAuditTests(unittest.TestCase):
             self.assertTrue(Path(summary_json_path).exists())
             self.assertTrue(Path(summary_txt_path).exists())
             self.assertTrue(latest_report.exported_at)
+            db.close()
+
+    def test_gui_export_path_uses_default_filtered_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            roster_path = tmp / 'ready.csv'
+            image_root = tmp / 'images'
+            export_root = tmp / 'exports'
+            image_root.mkdir(parents=True)
+            folder = image_root / 'A123'
+            folder.mkdir()
+            (folder / 'IMG_0001_primary.JPG').write_bytes(b'primary')
+            (folder / 'IMG_0002_alt.JPG').write_bytes(b'alt')
+            (folder / 'IMG_0003_review.JPG').write_bytes(b'review')
+
+            with roster_path.open('w', encoding='utf-8', newline='') as handle:
+                writer = csv.writer(handle)
+                writer.writerow([
+                    'Child ID',
+                    'Student firstname',
+                    'Student lastname',
+                    'Group',
+                    'Access Code (1)',
+                    'Barcode (1)',
+                ])
+                writer.writerow(['1', 'Rickey', 'Green', 'Team A', 'A123', '000123'])
+
+            roster = load_roster(roster_path)
+            scans = scan_image_root(image_root, roster)
+            db = Database(tmp / 'gui_export.db')
+            job_id = db.create_job(roster, image_root, scans)
+            db.connection.execute(
+                "UPDATE images SET class_label = 'review_required', selected_final = 0 WHERE filename = ?",
+                ('IMG_0003_review.JPG',),
+            )
+            db.connection.commit()
+
+            csv_path, json_path, routed_root, summary_json_path, summary_txt_path, audit_id = export_job_package_for_gui(
+                db,
+                job_id,
+                export_root,
+            )
+            latest_report = get_latest_export_audit_report(db, job_id)
+            manifest = json_path.read_text(encoding='utf-8')
+
+            self.assertGreater(audit_id, 0)
+            self.assertIsNotNone(latest_report)
+            assert latest_report is not None
+            self.assertTrue(Path(csv_path).exists())
+            self.assertTrue(Path(summary_json_path).exists())
+            self.assertTrue(Path(summary_txt_path).exists())
+            self.assertNotIn('review_required', manifest)
+            self.assertEqual(latest_report.skipped_count, 1)
+            self.assertEqual(latest_report.skipped_by_class_label['review_required'], 1)
+            self.assertFalse((routed_root / 'review_required' / 'A123' / 'IMG_0003_review.JPG').exists())
             db.close()
 
     def test_filtered_export_audit_reflects_policy_results(self) -> None:

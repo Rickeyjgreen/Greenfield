@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from .constants import APP_NAME, ROUTING_CLASSES, get_default_db_path
 from .db import Database
-from .exporter import export_manifest
+from .export_audit import export_job_package_for_gui
 from .roster import RosterValidationError, load_roster
 from .scanner import scan_image_root
 
@@ -171,9 +171,9 @@ class MainWindow(QMainWindow):
                 folder['folder_name'],
                 matched_text,
                 student_name,
-                folder['group_name'] or '',
+                folder['group_name'] or folder['source_group_name'] or '',
                 folder['access_code'] or folder['folder_key'],
-                folder['barcode_raw'] or '',
+                folder['barcode_raw'] or folder['source_barcode_raw'] or '',
                 str(folder['image_count']),
             ]
             for column, value in enumerate(values):
@@ -276,10 +276,19 @@ class MainWindow(QMainWindow):
         export_dir = QFileDialog.getExistingDirectory(self, 'Select export folder')
         if not export_dir:
             return
-        rows = self.database.fetch_export_rows(self.current_job_id)
-        csv_path, json_path = export_manifest(rows, export_dir)
-        self._append_status(f'Export complete: {csv_path} and {json_path}')
-        QMessageBox.information(self, APP_NAME, f'Exported manifest files:\n- {csv_path}\n- {json_path}')
+        csv_path, json_path, _routed_root, summary_json_path, summary_txt_path, _audit_id = export_job_package_for_gui(
+            self.database,
+            self.current_job_id,
+            export_dir,
+        )
+        self._append_status(
+            f'Export complete: {csv_path} and {json_path} (summary: {summary_json_path}, {summary_txt_path})'
+        )
+        QMessageBox.information(
+            self,
+            APP_NAME,
+            f'Exported files:\n- {csv_path}\n- {json_path}\n- {summary_json_path}\n- {summary_txt_path}',
+        )
 
 
 def launch() -> None:

@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .db import Database
-from .exporter import ExportPolicy, ExportSummary, export_package_with_policy, export_package_with_summary
+from .exporter import DEFAULT_EXPORT_POLICY, ExportPolicy, ExportSummary, export_package_with_policy, export_package_with_summary
 
 
 @dataclass(slots=True)
@@ -55,6 +55,19 @@ def export_job_package_with_audit(
         policy=policy,
     )
     return csv_path, manifest_json_path, routed_root, summary_json_path, summary_txt_path, audit_id
+
+
+def export_job_package_for_gui(
+    database: Database,
+    job_id: int,
+    output_dir: str | Path,
+) -> tuple[Path, Path, Path, Path, Path, int]:
+    return export_job_package_with_audit(
+        database=database,
+        job_id=job_id,
+        output_dir=output_dir,
+        policy=DEFAULT_EXPORT_POLICY,
+    )
 
 
 def export_job_package_with_policy_and_audit(
