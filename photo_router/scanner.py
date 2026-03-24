@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import xml.etree.ElementTree as ET
 
 from PIL import Image
 
@@ -14,6 +15,10 @@ TIFF_IMAGE_DESCRIPTION_TAG = 270
 TIFF_COPYRIGHT_TAG = 33432
 EXIF_XP_TITLE_TAG = 40091
 UNMATCHED_ROOT_GROUP = '__UNMATCHED_ROOT__'
+XMP_NAMESPACES = {
+    'dc': 'http://purl.org/dc/elements/1.1/',
+    'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+}
 
 
 @dataclass(slots=True)
@@ -105,6 +110,29 @@ def _barcode_candidates(raw_barcode: str) -> list[str]:
     return candidates
 
 
+def _xmp_alt_text(root: ET.Element, tag_name: str) -> str:
+    path = f'.//dc:{tag_name}/rdf:Alt/rdf:li'
+    for node in root.findall(path, XMP_NAMESPACES):
+        text = _normalize_metadata_value(node.text)
+        if text:
+            return text
+    return ''
+
+
+def _extract_xmp_fields(xmp_value: object) -> tuple[str, str]:
+    text = _normalize_metadata_value(xmp_value)
+    if not text:
+        return '', ''
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return '', ''
+
+    raw_barcode = _xmp_alt_text(root, 'rights')
+    title = _xmp_alt_text(root, 'title')
+    return raw_barcode, title
+
+
 def _extract_metadata_fields(image_path: Path) -> tuple[str, str]:
     try:
         with Image.open(image_path) as image:
@@ -128,6 +156,11 @@ def _extract_metadata_fields(image_path: Path) -> tuple[str, str]:
                 raw_barcode = raw_barcode or _normalize_metadata_value(info.get(key))
             for key in ('title', 'Title', 'ImageDescription'):
                 title = title or _normalize_title_value(info.get(key))
+
+            xmp_value = info.get('xmp') or (exif.get(700) if exif else None)
+            xmp_barcode, xmp_title = _extract_xmp_fields(xmp_value)
+            raw_barcode = raw_barcode or xmp_barcode
+            title = title or xmp_title
 
             return raw_barcode, title
     except Exception:
