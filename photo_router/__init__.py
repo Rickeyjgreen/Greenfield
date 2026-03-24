@@ -5,6 +5,7 @@ __all__ = [
     'export_audit',
     'exporter',
     'main_window',
+    'preview',
     'roster',
     'scanner',
 ]

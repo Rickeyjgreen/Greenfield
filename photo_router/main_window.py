@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from .constants import APP_NAME, ROUTING_CLASSES, get_default_db_path
 from .db import Database
 from .export_audit import export_job_package_for_gui
+from .preview import load_preview_pixmap
 from .roster import RosterValidationError, load_roster
 from .scanner import scan_image_root
 
@@ -95,14 +96,33 @@ class MainWindow(QMainWindow):
         self.folders_table.itemSelectionChanged.connect(self._load_selected_folder_images)
         self.folders_table.verticalHeader().setVisible(False)
 
+        right_panel = QVBoxLayout()
         self.images_table = QTableWidget(0, 6)
         self.images_table.setHorizontalHeaderLabels([
             'Order', 'Filename', 'Class Label', 'Final', 'Review Reason', 'Path'
         ])
         self.images_table.verticalHeader().setVisible(False)
+        self.images_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.images_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.images_table.itemSelectionChanged.connect(self._update_preview_for_selected_image)
+
+        preview_box = QGroupBox('Preview')
+        preview_layout = QVBoxLayout(preview_box)
+        self.preview_label = QLabel('Select an image to preview')
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setMinimumHeight(280)
+        self.preview_label.setScaledContents(False)
+        self.preview_status_label = QLabel('')
+        self.preview_status_label.setAlignment(Qt.AlignCenter)
+        self.preview_status_label.setWordWrap(True)
+        preview_layout.addWidget(self.preview_label)
+        preview_layout.addWidget(self.preview_status_label)
+
+        right_panel.addWidget(self.images_table, stretch=3)
+        right_panel.addWidget(preview_box, stretch=2)
 
         body_layout.addWidget(self.folders_table, stretch=3)
-        body_layout.addWidget(self.images_table, stretch=4)
+        body_layout.addLayout(right_panel, stretch=4)
         layout.addLayout(body_layout)
         layout.addWidget(QLabel('Activity'))
         layout.addWidget(self.status_log)
@@ -130,11 +150,17 @@ class MainWindow(QMainWindow):
     def _append_status(self, message: str) -> None:
         self.status_log.append(message)
 
+    def _clear_preview(self, message: str = 'Select an image to preview') -> None:
+        self.preview_label.clear()
+        self.preview_label.setText(message)
+        self.preview_status_label.setText('')
+
     def _clear_folder_selection_state(self) -> None:
         self.current_folder_id = None
         self.folder_rows_by_table_row.clear()
         self.folders_table.clearSelection()
         self.images_table.setRowCount(0)
+        self._clear_preview()
 
     def _ingest_job(self) -> None:
         roster_path = self.roster_path_edit.text().strip()
@@ -189,12 +215,14 @@ class MainWindow(QMainWindow):
         if not selected_items:
             self.current_folder_id = None
             self.images_table.setRowCount(0)
+            self._clear_preview()
             return
         table_row = selected_items[0].row()
         folder_id = self.folder_rows_by_table_row.get(table_row)
         if folder_id is None:
             self.current_folder_id = None
             self.images_table.setRowCount(0)
+            self._clear_preview()
             return
         self.current_folder_id = folder_id
         images = self.database.fetch_images_for_folder(folder_id)
@@ -231,6 +259,42 @@ class MainWindow(QMainWindow):
 
         self.images_table.resizeColumnsToContents()
         self._append_status(f'Loaded {len(images)} images for folder id {folder_id}.')
+        if images:
+            self.images_table.selectRow(0)
+        else:
+            self._clear_preview()
+
+    def _update_preview_for_selected_image(self) -> None:
+        selected_items = self.images_table.selectionModel().selectedRows()
+        if not selected_items:
+            self._clear_preview()
+            return
+        row_index = selected_items[0].row()
+        path_item = self.images_table.item(row_index, 5)
+        if path_item is None:
+            self._clear_preview('Preview unavailable')
+            self.preview_status_label.setText('No image path available for the selected row.')
+            return
+
+        pixmap, error = load_preview_pixmap(path_item.text())
+        if pixmap is None:
+            self._clear_preview('Preview unavailable')
+            self.preview_status_label.setText(error or 'Unable to load preview.')
+            return
+
+        scaled = pixmap.scaled(
+            self.preview_label.size() if self.preview_label.width() > 1 else pixmap.size(),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        self.preview_label.setPixmap(scaled)
+        self.preview_label.setText('')
+        self.preview_status_label.setText(path_item.text())
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if self.images_table.selectionModel() is not None and self.images_table.selectionModel().selectedRows():
+            self._update_preview_for_selected_image()
 
     def _save_folder_review(self) -> None:
         if self.current_folder_id is None:
